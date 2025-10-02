@@ -281,9 +281,6 @@ if process_button and uploaded_file is not None:
         # --- Métricas e Gráficos ---
         col1, col2, col3 = st.columns(3)
         col1.metric("Total de Registros Processados", f"{len(df_results)}")
-        
-        avg_prob = df_results['prob_pagar'].mean()
-        col2.metric("Prob. Média de Reversão", f"{avg_prob:.0f}%")
 
         prediction_counts = df_results['previsao_label'].value_counts()
         col3.metric("Previsão Majoritária", f"{prediction_counts.index[0]}")
