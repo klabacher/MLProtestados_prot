@@ -349,7 +349,7 @@ if process_button and uploaded_file is not None:
         df_results = run_prediction(df_input, models, risk_category=risk_to_apply)
 
     if df_results is not None:
-        st.header("Resultados da Análise")
+        st.header("Analise de propensão a pagamento após protesto")
 
         # --- Métricas e Gráficos ---
         col1, col2, col3 = st.columns(3)
