@@ -356,7 +356,8 @@ if process_button and uploaded_file is not None:
         col1.metric("Total de Registros Processados", f"{len(df_results)}")
 
         prediction_counts = df_results['previsao_label'].value_counts()
-        col3.metric("Previsão Majoritária", f"{prediction_counts.index[0]}")
+        col2.metric("Deve protestar", f"{prediction_counts.get('PROTESTAR', 0)}")
+        col3.metric("Não deve protestar", f"{prediction_counts.get('NÃO Protestar', 0)}")
 
         st.subheader("Distribuição das Previsões")
         st.bar_chart(prediction_counts)
