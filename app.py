@@ -29,9 +29,10 @@ def clean_column_names(df):
     return df_copy
 
 def engineer_features_master(df):
-    """Executa a engenharia de features de forma consistente."""
+    """Executa a engenharia de features de forma consistente (V3)."""
     df_eng = df.copy()
     
+    # Conversão de colunas monetárias
     cols_to_convert = [
         'total_financiado', 'saldo_vencido', 'recebido', 
         'saldo_vencido_com_juros', 'total_pago_com_juros', 
@@ -44,11 +45,30 @@ def engineer_features_master(df):
             df_eng[col] = df_eng[col].str.replace('R$', '', regex=False).str.replace('.', '', regex=False).str.replace(',', '.', regex=False).str.strip()
             df_eng[col] = pd.to_numeric(df_eng[col], errors='coerce')
 
-    df_eng['faixa_etaria'] = pd.cut(df_eng['idade'], bins=[0, 30, 50, 65, 120], labels=['18-30', '31-50', '51-65', '65+'])
+    # Correção de tipos (V3)
+    if 'pdd' in df_eng.columns:
+        df_eng['pdd'] = df_eng['pdd'].astype(str)
+
+    # Features de Score e Idade (V3)
     df_eng['score_x_idade'] = df_eng['score'] * df_eng['idade']
     df_eng['score_ao_quadrado'] = df_eng['score'] ** 2
     df_eng['score_por_idade'] = df_eng['score'] / (df_eng['idade'] + 1)
     
+    # Faixa etária (V3 - bins atualizados)
+    df_eng['faixa_etaria'] = pd.cut(
+        df_eng['idade'], 
+        bins=[0, 25, 35, 45, 55, 65, 120], 
+        labels=['18-25', '26-35', '36-45', '46-55', '56-65', '65+']
+    ).astype(str)
+    
+    # Faixa de score (V3 - nova feature)
+    df_eng['faixa_score'] = pd.cut(
+        df_eng['score'],
+        bins=[0, 300, 500, 700, 850, 1000],
+        labels=['Muito_Baixo', 'Baixo', 'Medio', 'Bom', 'Excelente']
+    ).astype(str)
+    
+    # Região
     mapa_regioes = {
         'AC': 'Norte', 'AP': 'Norte', 'AM': 'Norte', 'PA': 'Norte', 'RO': 'Norte', 'RR': 'Norte', 'TO': 'Norte',
         'AL': 'Nordeste', 'BA': 'Nordeste', 'CE': 'Nordeste', 'MA': 'Nordeste', 'PB': 'Nordeste', 'PE': 'Nordeste', 'PI': 'Nordeste', 'RN': 'Nordeste', 'SE': 'Nordeste',
@@ -58,23 +78,55 @@ def engineer_features_master(df):
     }
     df_eng['regiao'] = df_eng['endereco_estado'].str.upper().str.strip().map(mapa_regioes).fillna('Outra')
     
-    df_eng['percentual_vencido'] = (df_eng['saldo_vencido'] / df_eng['total_financiado'])
-    df_eng['percentual_pago'] = (df_eng['recebido'] / df_eng['total_financiado'])
-    df_eng['valor_medio_parcela'] = (df_eng['quantidade_parcelas'] / df_eng['total_financiado'])
+    # Features financeiras (V3 - corrigidas)
+    df_eng['valor_medio_parcela'] = np.where(
+        df_eng['quantidade_parcelas'] > 0,
+        df_eng['total_financiado'] / df_eng['quantidade_parcelas'],
+        0
+    )
     
-    df_eng.replace([np.inf, -np.inf], 0, inplace=True)
+    df_eng['percentual_vencido'] = np.where(
+        df_eng['total_financiado'] > 0,
+        df_eng['saldo_vencido'] / df_eng['total_financiado'],
+        0
+    )
+    
+    df_eng['percentual_pago'] = np.where(
+        df_eng['total_financiado'] > 0,
+        df_eng['recebido'] / df_eng['total_financiado'],
+        0
+    )
+    
+    df_eng['percentual_parcelas_vencidas'] = np.where(
+        df_eng['quantidade_parcelas'] > 0,
+        df_eng['quantidade_parcelas_vencidas'] / df_eng['quantidade_parcelas'],
+        0
+    )
+    
+    # Severidade do atraso (V3)
+    df_eng['severidade_atraso'] = df_eng['dias_em_atraso'] * df_eng['percentual_vencido']
+    
+    # Indicadores binários (V3)
+    df_eng['ja_pagou_algo'] = (df_eng['recebido'] > 0).astype(int)
+    df_eng['atraso_severo'] = (df_eng['dias_em_atraso'] > 90).astype(int)
+    df_eng['alto_comprometimento'] = (df_eng['percentual_vencido'] > 0.5).astype(int)
+    
+    # Features de interação (V3)
+    df_eng['score_x_percentual_pago'] = df_eng['score'] * df_eng['percentual_pago']
+    df_eng['score_x_atraso'] = df_eng['score'] / (df_eng['dias_em_atraso'] + 1)
+    
+    # Log de valores monetários (V3)
+    df_eng['total_financiado_log'] = np.log1p(df_eng['total_financiado'].clip(lower=0))
+    df_eng['saldo_vencido_log'] = np.log1p(df_eng['saldo_vencido'].clip(lower=0))
+    
+    # Limpeza final
+    df_eng.replace([np.inf, -np.inf], np.nan, inplace=True)
     
     numeric_cols = df_eng.select_dtypes(include=np.number).columns
     df_eng[numeric_cols] = df_eng[numeric_cols].fillna(0)
     
-    categorical_cols = df_eng.select_dtypes(include=['category']).columns
-    for col in categorical_cols:
-        if pd.api.types.is_categorical_dtype(df_eng[col]):
-            if 'Desconhecido' not in df_eng[col].cat.categories:
-                df_eng[col] = df_eng[col].cat.add_categories('Desconhecido')
-
-    object_and_cat_cols = df_eng.select_dtypes(include=['object', 'category']).columns
-    df_eng[object_and_cat_cols] = df_eng[object_and_cat_cols].fillna('Desconhecido')
+    object_cols = df_eng.select_dtypes(include=['object']).columns
+    df_eng[object_cols] = df_eng[object_cols].fillna('Desconhecido')
     
     return df_eng
 
@@ -84,19 +136,26 @@ def engineer_features_master(df):
 
 @st.cache_resource
 def load_models():
-    """Carrega os modelos de ML, usando cache para performance."""
+    """Carrega os modelos V3 de ML, usando cache para performance."""
     models = {}
+    # Caminhos dos modelos V3 (ajuste conforme o diretório dos seus modelos)
     model_files = {
-        "Alto": "pipeline_campeao_Alto.joblib",
-        "Médio": "pipeline_campeao_Medio.joblib",
-        "Baixo": "pipeline_campeao_Baixo.joblib"
+        "Alto": "modelo_Alto.joblib",
+        "Médio": "modelo_Médio.joblib",
+        "Baixo": "modelo_Baixo.joblib"
     }
     for risk, filename in model_files.items():
         try:
-            models[risk] = joblib.load(filename)
+            model_data = joblib.load(filename)
+            # V3: modelo é um dicionário com 'pipeline', 'optimal_threshold', 'features'
+            models[risk] = model_data
+            st.sidebar.success(f"✅ Modelo {risk} carregado (threshold: {model_data.get('optimal_threshold', 0.5):.2f})")
         except FileNotFoundError:
-            st.error(f"ERRO CRÍTICO: Modelo '{filename}' não encontrado. A aplicação não pode continuar.")
-            return None
+            st.sidebar.warning(f"⚠️ Modelo '{filename}' não encontrado.")
+    
+    if not models:
+        st.error("ERRO CRÍTICO: Nenhum modelo foi carregado. Verifique os arquivos .joblib.")
+        return None
     return models
 
 models = load_models()
@@ -107,99 +166,113 @@ models = load_models()
 
 def run_prediction(df, models_dict, risk_category=None):
     """
-    Prepara os dados, executa as predições e retorna um dataframe com os resultados.
+    Prepara os dados, executa as predições usando modelos V3 com threshold otimizado.
     
     :param df: DataFrame de entrada.
-    :param models_dict: Dicionário com os modelos carregados.
+    :param models_dict: Dicionário com os modelos V3 carregados.
     :param risk_category: (Opcional) Se especificado, processa o DF inteiro para essa categoria.
     :return: DataFrame com os resultados ou None se houver erro.
     """
-    
-    # Lista de features que o modelo espera, na ordem correta
-    EXPECTED_FEATURES = [
-        'score', 'idade', 'total_financiado', 'quantidade_parcelas', 'saldo_vencido',
-        'quantidade_parcelas_vencidas', 'recebido', 'dias_em_atraso',
-        'saldo_vencido_com_juros', 'total_pago_com_juros', 'vencidos_sem_juros_tmb',
-        'recebido_sem_juros_tmb', 'score_x_idade', 'score_ao_quadrado', 'score_por_idade',
-        'percentual_vencido', 'percentual_pago', 'valor_medio_parcela',
-        'status_cobranca', 'faixa_etaria', 'regiao', 'segmento',
-        'categoria_risco_score', 'modalidade', 'pdd'
-    ]
-
     st.info("Iniciando preparação dos dados...")
     
     # 1. Padroniza nomes das colunas
     df_clean = clean_column_names(df)
     
-    # 2. Validação de colunas essenciais para engenharia
-    essential_cols = ['idade', 'score', 'endereco_estado', 'total_financiado', 'saldo_vencido', 'recebido', 'quantidade_parcelas']
+    # 2. Validação de colunas essenciais
+    essential_cols = ['idade', 'score', 'endereco_estado', 'total_financiado', 
+                      'saldo_vencido', 'recebido', 'quantidade_parcelas', 'dias_em_atraso']
     missing_cols = [col for col in essential_cols if col not in df_clean.columns]
     if missing_cols:
-        st.error(f"Processo interrompido. As seguintes colunas essenciais não foram encontradas no arquivo: **{', '.join(missing_cols)}**")
+        st.error(f"Colunas essenciais não encontradas: **{', '.join(missing_cols)}**")
         return None
 
-    # 3. Engenharia de Features
+    # 3. Engenharia de Features (V3)
     df_featured = engineer_features_master(df_clean)
-    st.write("✅ Engenharia de features concluída.")
+    st.write("✅ Engenharia de features V3 concluída.")
 
-    # 4. Validação final e ordenação das colunas
-    missing_features = [f for f in EXPECTED_FEATURES if f not in df_featured.columns]
-    if missing_features:
-        st.error(f"Erro após a preparação. As features obrigatórias a seguir não puderam ser criadas: **{', '.join(missing_features)}**")
-        return None
-        
-    df_ready = df_featured[EXPECTED_FEATURES]
-    st.write(f"✅ DataFrame final pronto com {df_ready.shape[1]} colunas na ordem correta.")
-
-    # 5. Lógica de Predição
-    st.info("Executando modelos de Machine Learning...")
+    # 4. Lógica de Predição com modelos V3
+    st.info("Executando modelos de Machine Learning V3...")
     
     results_list = []
     
-    if risk_category: # Modo de risco específico
+    if risk_category:  # Modo de risco específico
         st.write(f"Aplicando o modelo de risco **'{risk_category}'** para todo o arquivo.")
-        model = models_dict.get(risk_category)
-        if model:
-            predictions = model.predict(df_ready)
-            probabilities = model.predict_proba(df_ready)[:, 1]
+        model_data = models_dict.get(risk_category)
+        if model_data:
+            pipeline = model_data['pipeline']
+            threshold = model_data.get('optimal_threshold', 0.5)
+            features = model_data.get('features', [])
+            
+            st.write(f"   → Usando threshold otimizado: {threshold:.2f}")
+            
+            # Verifica e cria features faltantes
+            for f in features:
+                if f not in df_featured.columns:
+                    df_featured[f] = 0 if f not in ['status_cobranca', 'faixa_etaria', 'faixa_score', 'regiao', 'segmento', 'categoria_risco_score', 'modalidade', 'pdd'] else 'Desconhecido'
+            
+            X = df_featured[features]
+            probabilities = pipeline.predict_proba(X)[:, 1]
+            predictions = (probabilities >= threshold).astype(int)
             
             temp_df = df.copy()
             temp_df['previsao'] = predictions
             temp_df['prob_pagar'] = probabilities * 100
+            temp_df['threshold_usado'] = threshold
             results_list.append(temp_df)
         else:
             st.error(f"Modelo para risco '{risk_category}' não encontrado.")
             return None
             
-    else: # Modo de roteamento automático
-        if 'categoria_risco_score' not in df_ready.columns:
-            st.error("Processo interrompido. A coluna **'categoria_risco_score'** é necessária para o roteamento automático, mas não foi encontrada.")
+    else:  # Modo de roteamento automático
+        if 'categoria_risco_score' not in df_featured.columns:
+            st.error("Coluna **'categoria_risco_score'** necessária para roteamento automático.")
             return None
+        
+        # Mapeia valores para garantir correspondência
+        risk_mapping = {'Alto': 'Alto', 'Médio': 'Medio', 'Medio': 'Medio', 'Baixo': 'Baixo'}
+        
+        for risk_level, model_data in models_dict.items():
+            # Normaliza o nome do risco
+            risk_values = [risk_level, risk_mapping.get(risk_level, risk_level)]
+            df_subset_idx = df_featured[df_featured['categoria_risco_score'].isin(risk_values)].index
             
-        for risk_level, model in models_dict.items():
-            df_subset = df_ready[df_ready['categoria_risco_score'] == risk_level]
-            original_indices = df_subset.index
-            
-            if not df_subset.empty:
-                st.write(f"  - Processando {len(df_subset)} registros para o risco **'{risk_level}'**...")
-                predictions = model.predict(df_subset)
-                probabilities = model.predict_proba(df_subset)[:, 1]
+            if len(df_subset_idx) > 0:
+                pipeline = model_data['pipeline']
+                threshold = model_data.get('optimal_threshold', 0.5)
+                features = model_data.get('features', [])
                 
-                # Junta os resultados ao dataframe original correspondente
-                temp_df = df.loc[original_indices].copy()
+                st.write(f"  - Processando {len(df_subset_idx)} registros para **'{risk_level}'** (threshold: {threshold:.2f})...")
+                
+                # Prepara subset
+                df_subset = df_featured.loc[df_subset_idx].copy()
+                
+                # Verifica features
+                for f in features:
+                    if f not in df_subset.columns:
+                        df_subset[f] = 0 if f not in ['status_cobranca', 'faixa_etaria', 'faixa_score', 'regiao', 'segmento', 'categoria_risco_score', 'modalidade', 'pdd'] else 'Desconhecido'
+                
+                X = df_subset[features]
+                probabilities = pipeline.predict_proba(X)[:, 1]
+                predictions = (probabilities >= threshold).astype(int)
+                
+                temp_df = df.loc[df_subset_idx].copy()
                 temp_df['previsao'] = predictions
                 temp_df['prob_pagar'] = probabilities * 100
+                temp_df['threshold_usado'] = threshold
                 results_list.append(temp_df)
 
     if not results_list:
-        st.warning("Nenhum registro correspondente às categorias de risco (Alto, Médio, Baixo) foi encontrado no arquivo.")
+        st.warning("Nenhum registro correspondente às categorias de risco foi encontrado.")
         return None
 
-    # 6. Consolidação dos Resultados
+    # 5. Consolidação dos Resultados
     df_final_results = pd.concat(results_list).sort_index()
-    df_final_results['previsao_label'] = df_final_results['previsao'].map({0: 'Não vai reverter', 1: 'Vai reverter'})
+    df_final_results['previsao_label'] = df_final_results['previsao'].map({
+        0: 'NÃO Protestar', 
+        1: 'PROTESTAR'
+    })
     
-    st.success("🎉 Previsões concluídas com sucesso!")
+    st.success("🎉 Previsões V3 concluídas com sucesso!")
     return df_final_results
 
 

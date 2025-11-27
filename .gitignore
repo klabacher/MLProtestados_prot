@@ -2,4 +2,5 @@ catboost_info/
 mlruns/
 .venv/
 Base8mil.xlsx
+data/
 Novo.csv
